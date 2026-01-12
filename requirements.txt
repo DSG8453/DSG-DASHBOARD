@@ -4,6 +4,8 @@ motor==3.3.1
 pydantic==2.12.5
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4 is incompatible with bcrypt>=4 (crashes at import/startup)
+bcrypt==3.2.2
 python-dotenv==1.2.1
 google-cloud-secret-manager==2.18.0
 
