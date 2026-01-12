@@ -19,15 +19,19 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Backend dependencies live under ./backend
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
 RUN playwright install chromium
 
-COPY . .
+# Copy backend source (keeps image smaller than copying everything)
+COPY backend ./backend
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8080
 
+# Run FastAPI app from backend/server.py
+WORKDIR /app/backend
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
