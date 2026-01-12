@@ -1,0 +1,20 @@
+.git
+.emergent
+
+# Frontend / extension (not needed for backend container)
+frontend
+browser-extension
+
+# Node / build outputs
+**/node_modules
+**/build
+**/dist
+
+# Python caches
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+
+# OS/editor
+.DS_Store
