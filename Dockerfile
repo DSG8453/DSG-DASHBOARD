@@ -1,33 +1,29 @@
 FROM python:3.11-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
-    curl \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
+    --no-install-recommends \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python deps (keep at repo root for Cloud Build defaults)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy backend source (avoid copying frontend/extension into the image)
+COPY backend ./backend
 
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8080
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+# Cloud Run sets $PORT; default to 8080 locally
+WORKDIR /app/backend
+ENV PORT=8080
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT}"]
