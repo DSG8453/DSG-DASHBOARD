@@ -594,10 +594,22 @@ async def google_callback(request: Request, code: str = None, error: str = None,
     if not google_email:
         return RedirectResponse(url=f"{frontend_url}/login?error=no_email")
     
+    try:
+        db_name = getattr(db, "name", None)
+    except Exception:
+        db_name = None
+    print(f"[Google OAuth] Looking up user email={google_email} db={db_name}")
+
     # Find existing user by email
     user = await db.users.find_one({"email": google_email})
     
     if not user:
+        # This almost always means the backend is pointed at a different database than expected.
+        try:
+            users_count = await db.users.estimated_document_count()
+        except Exception:
+            users_count = None
+        print(f"[Google OAuth] No account found for {google_email} in db={db_name} users_count={users_count}")
         return RedirectResponse(url=f"{frontend_url}/login?error=no_account&email={google_email}")
     
     # Check if user is suspended
