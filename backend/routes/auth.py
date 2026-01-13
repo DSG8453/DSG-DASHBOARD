@@ -23,12 +23,12 @@ security = HTTPBearer()
 try:
     from services.secret_manager_service import SecretManagerService
     secret_manager = SecretManagerService()
-    GOOGLE_CLIENT_ID = secret_manager.get_secret("google-client-id") or os.getenv("GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET = secret_manager.get_secret("google-client-secret") or os.getenv("GOOGLE_CLIENT_SECRET")
+    GOOGLE_CLIENT_ID = (secret_manager.get_secret("google-client-id") or os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+    GOOGLE_CLIENT_SECRET = (secret_manager.get_secret("google-client-secret") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
 except Exception as e:
     print(f"Warning: Could not load Google OAuth secrets: {e}")
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+    GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+    GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
 # OAuth redirect/callback URI MUST match what is configured in Google Cloud Console.
 # IMPORTANT: this callback lives on the BACKEND domain (not Vercel).
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://api.dsgtransport.net/api/auth/google/callback")
@@ -92,6 +92,19 @@ def _require_google_oauth_configured() -> None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Google OAuth is not configured (missing GOOGLE_CLIENT_SECRET / Secret Manager secret 'google-client-secret').",
+        )
+
+    # Basic sanity check: Google OAuth web client IDs look like:
+    # 123456789012-abcdefg.apps.googleusercontent.com
+    # This catches common misconfigs (wrong var, JSON pasted, quotes, etc.)
+    if ".apps.googleusercontent.com" not in GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Google OAuth client id looks invalid. "
+                "Expected something ending with '.apps.googleusercontent.com'. "
+                "Re-check GOOGLE_CLIENT_ID / Secret Manager secret 'google-client-id'."
+            ),
         )
 
 class OTPRequest(BaseModel):
@@ -482,6 +495,9 @@ async def google_login(request: Request):
 
     redirect_uri = _effective_redirect_uri(request)
     frontend_url = _effective_frontend_url(request)
+    # Safe debug log: never print secrets, only last chars of client id.
+    client_id_tail = GOOGLE_CLIENT_ID[-12:] if GOOGLE_CLIENT_ID else "missing"
+    print(f"[Google OAuth] /google/login using redirect_uri={redirect_uri} frontend_url={frontend_url} client_id_tail=...{client_id_tail}")
     
     # Build Google OAuth URL
     params = {
