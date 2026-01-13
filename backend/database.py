@@ -12,7 +12,34 @@ try:
 except Exception as e:
     print(f"Warning: Could not load secret from Secret Manager: {e}")
     MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.getenv("DB_NAME", "dsg_transport")
+
+def _db_name_from_mongo_uri(uri: str) -> str | None:
+    """
+    Extract database name from MongoDB URI if present:
+      mongodb+srv://user:pass@host/<db>?retryWrites=true
+      mongodb://user:pass@host:27017/<db>
+    Returns None if no db name is present.
+    """
+    if not uri:
+        return None
+    try:
+        # Strip scheme
+        rest = uri.split("://", 1)[1] if "://" in uri else uri
+        # Find first "/" after host(s)
+        if "/" not in rest:
+            return None
+        path = rest.split("/", 1)[1]  # after first slash
+        if not path:
+            return None
+        db = path.split("?", 1)[0].strip()
+        return db or None
+    except Exception:
+        return None
+
+# Prefer explicit DB_NAME; otherwise use the DB embedded in the URI; else fallback.
+DB_NAME = os.getenv("DB_NAME")
+if not DB_NAME:
+    DB_NAME = _db_name_from_mongo_uri(MONGO_URL) or "dsg_transport"
 
 client: AsyncIOMotorClient = None
 db = None
