@@ -19,8 +19,33 @@ db = None
 
 async def connect_db():
     global client, db
-    client = AsyncIOMotorClient(MONGO_URL)
+    # IMPORTANT:
+    # Motor/PyMongo can "hang" on first awaited operation if MongoDB is unreachable.
+    # Use aggressive timeouts + explicit ping so the app fails fast with a clear error
+    # instead of getting stuck on "Waiting for application startup."
+    server_selection_timeout_ms = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
+    connect_timeout_ms = int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "5000"))
+    socket_timeout_ms = int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "5000"))
+
+    client = AsyncIOMotorClient(
+        MONGO_URL,
+        serverSelectionTimeoutMS=server_selection_timeout_ms,
+        connectTimeoutMS=connect_timeout_ms,
+        socketTimeoutMS=socket_timeout_ms,
+    )
     db = client[DB_NAME]
+
+    try:
+        # Forces an actual connection attempt immediately.
+        await client.admin.command("ping")
+    except Exception as e:
+        # Raise a RuntimeError so FastAPI/uvicorn logs a clear startup failure.
+        raise RuntimeError(
+            "MongoDB connection failed during startup. "
+            f"Check MONGO_URL/DB_NAME and ensure MongoDB is reachable. "
+            f"MONGO_URL={MONGO_URL!r} DB_NAME={DB_NAME!r} "
+            f"(timeouts: selection={server_selection_timeout_ms}ms connect={connect_timeout_ms}ms)"
+        ) from e
     
     # Create indexes
     await db.users.create_index("email", unique=True)
