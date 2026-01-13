@@ -30,9 +30,11 @@ except Exception as e:
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # OAuth redirect/callback URI MUST match what is configured in Google Cloud Console.
-# Prefer environment variables so Vercel previews / staging can work without code changes.
+# IMPORTANT: this callback lives on the BACKEND domain (not Vercel).
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://api.dsgtransport.net/api/auth/google/callback")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://portal.dsgtransport.net")
+
+# Frontend origin to redirect back to after OAuth. Prefer explicit env, otherwise infer from request.
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 def _origin_from_url(url: str) -> str | None:
     try:
@@ -63,17 +65,34 @@ def _effective_frontend_url(request: Request) -> str:
     return "https://portal.dsgtransport.net"
 
 def _effective_redirect_uri(request: Request) -> str:
-    # Explicit env wins (must match Google Console)
-    if os.getenv("GOOGLE_REDIRECT_URI"):
-        return GOOGLE_REDIRECT_URI
+    """
+    Return the OAuth callback URL used for BOTH:
+    - redirect_uri sent to Google in /google/login
+    - redirect_uri sent to Google token exchange in /google/callback
 
-    # For local/dev without env, derive from request host.
-    # Note: behind reverse proxies, X-Forwarded-Proto should be set.
-    host = request.headers.get("host", "")
-    proto = request.headers.get("x-forwarded-proto", "https")
-    if host:
-        return f"{proto}://{host}/api/auth/google/callback"
+    This must match Google Cloud Console *exactly* and should be on the backend domain.
+    Do NOT derive it from request Host in production because proxies/rewrites can change Host.
+    """
+    host = (request.headers.get("host") or "").lower()
+    if "localhost" in host or host.startswith("127.0.0.1"):
+        proto = request.headers.get("x-forwarded-proto", "http")
+        return f"{proto}://{request.headers.get('host')}/api/auth/google/callback"
+
+    # Production/staging: use configured or default backend callback URL
     return GOOGLE_REDIRECT_URI
+
+def _require_google_oauth_configured() -> None:
+    # If these are missing/invalid, Google returns: 401 invalid_client (OAuth client was not found)
+    if not GOOGLE_CLIENT_ID or not isinstance(GOOGLE_CLIENT_ID, str) or not GOOGLE_CLIENT_ID.strip():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured (missing GOOGLE_CLIENT_ID / Secret Manager secret 'google-client-id').",
+        )
+    if not GOOGLE_CLIENT_SECRET or not isinstance(GOOGLE_CLIENT_SECRET, str) or not GOOGLE_CLIENT_SECRET.strip():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured (missing GOOGLE_CLIENT_SECRET / Secret Manager secret 'google-client-secret').",
+        )
 
 class OTPRequest(BaseModel):
     email: str
@@ -459,6 +478,8 @@ async def google_login(request: Request):
     Initiate direct Google OAuth login.
     Redirects user to Google's login page.
     """
+    _require_google_oauth_configured()
+
     redirect_uri = _effective_redirect_uri(request)
     frontend_url = _effective_frontend_url(request)
     
