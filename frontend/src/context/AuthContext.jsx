@@ -34,7 +34,7 @@ export const AuthProvider = ({ children }) => {
     
     const connectWebSocket = () => {
       // Get WebSocket URL from backend URL
-      const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
+      const backendUrl = (process.env.REACT_APP_BACKEND_URL || "").replace(/\/+$/, "").replace(/\/api$/, "");
       const wsProtocol = backendUrl.startsWith('https') ? 'wss' : 'ws';
       const wsHost = backendUrl.replace(/^https?:\/\//, '').replace(/\/api$/, '');
       const wsUrl = `${wsProtocol}://${wsHost}/ws/${token}`;

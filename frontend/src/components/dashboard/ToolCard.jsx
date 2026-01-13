@@ -309,7 +309,12 @@ export const ToolCard = ({ tool, onDelete, onUpdate }) => {
       
       if (response.access_url || response.gateway_url) {
         // Open the secure access URL (handles auto-login via form submission)
-        const fullUrl = process.env.REACT_APP_BACKEND_URL + (response.gateway_url || response.access_url);
+        const backendUrl = process.env.REACT_APP_BACKEND_URL || "";
+        const pathOrUrl = response.gateway_url || response.access_url;
+        const fullUrl =
+          typeof pathOrUrl === "string" && /^https?:\/\//i.test(pathOrUrl)
+            ? pathOrUrl
+            : `${backendUrl}${pathOrUrl}`;
         window.open(fullUrl, "_blank", "noopener,noreferrer");
         
         toast.success(`Opening ${tool.name}`, {

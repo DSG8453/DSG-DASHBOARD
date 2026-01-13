@@ -12,15 +12,67 @@ try:
 except Exception as e:
     print(f"Warning: Could not load secret from Secret Manager: {e}")
     MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.getenv("DB_NAME", "dsg_transport")
+
+def _db_name_from_mongo_uri(uri: str) -> str | None:
+    """
+    Extract database name from MongoDB URI if present:
+      mongodb+srv://user:pass@host/<db>?retryWrites=true
+      mongodb://user:pass@host:27017/<db>
+    Returns None if no db name is present.
+    """
+    if not uri:
+        return None
+    try:
+        # Strip scheme
+        rest = uri.split("://", 1)[1] if "://" in uri else uri
+        # Find first "/" after host(s)
+        if "/" not in rest:
+            return None
+        path = rest.split("/", 1)[1]  # after first slash
+        if not path:
+            return None
+        db = path.split("?", 1)[0].strip()
+        return db or None
+    except Exception:
+        return None
+
+# Prefer explicit DB_NAME; otherwise use the DB embedded in the URI; else fallback.
+DB_NAME = os.getenv("DB_NAME")
+if not DB_NAME:
+    DB_NAME = _db_name_from_mongo_uri(MONGO_URL) or "dsg_transport"
 
 client: AsyncIOMotorClient = None
 db = None
 
 async def connect_db():
     global client, db
-    client = AsyncIOMotorClient(MONGO_URL)
+    # IMPORTANT:
+    # Motor/PyMongo can "hang" on first awaited operation if MongoDB is unreachable.
+    # Use aggressive timeouts + explicit ping so the app fails fast with a clear error
+    # instead of getting stuck on "Waiting for application startup."
+    server_selection_timeout_ms = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
+    connect_timeout_ms = int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "5000"))
+    socket_timeout_ms = int(os.getenv("MONGO_SOCKET_TIMEOUT_MS", "5000"))
+
+    client = AsyncIOMotorClient(
+        MONGO_URL,
+        serverSelectionTimeoutMS=server_selection_timeout_ms,
+        connectTimeoutMS=connect_timeout_ms,
+        socketTimeoutMS=socket_timeout_ms,
+    )
     db = client[DB_NAME]
+
+    try:
+        # Forces an actual connection attempt immediately.
+        await client.admin.command("ping")
+    except Exception as e:
+        # Raise a RuntimeError so FastAPI/uvicorn logs a clear startup failure.
+        raise RuntimeError(
+            "MongoDB connection failed during startup. "
+            f"Check MONGO_URL/DB_NAME and ensure MongoDB is reachable. "
+            f"MONGO_URL={MONGO_URL!r} DB_NAME={DB_NAME!r} "
+            f"(timeouts: selection={server_selection_timeout_ms}ms connect={connect_timeout_ms}ms)"
+        ) from e
     
     # Create indexes
     await db.users.create_index("email", unique=True)

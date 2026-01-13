@@ -12,7 +12,7 @@ import string
 import os
 import httpx
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 router = APIRouter()
 security = HTTPBearer()
@@ -23,13 +23,89 @@ security = HTTPBearer()
 try:
     from services.secret_manager_service import SecretManagerService
     secret_manager = SecretManagerService()
-    GOOGLE_CLIENT_ID = secret_manager.get_secret("google-client-id") or os.getenv("GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET = secret_manager.get_secret("google-client-secret") or os.getenv("GOOGLE_CLIENT_SECRET")
+    GOOGLE_CLIENT_ID = (secret_manager.get_secret("google-client-id") or os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+    GOOGLE_CLIENT_SECRET = (secret_manager.get_secret("google-client-secret") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
 except Exception as e:
     print(f"Warning: Could not load Google OAuth secrets: {e}")
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = "https://api.dsgtransport.net/api/auth/google/callback"
+    GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+    GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
+# OAuth redirect/callback URI MUST match what is configured in Google Cloud Console.
+# IMPORTANT: this callback lives on the BACKEND domain (not Vercel).
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://api.dsgtransport.net/api/auth/google/callback")
+
+# Frontend origin to redirect back to after OAuth. Prefer explicit env, otherwise infer from request.
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+
+def _origin_from_url(url: str) -> str | None:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return None
+    return None
+
+def _effective_frontend_url(request: Request) -> str:
+    # Explicit env wins (production/staging best practice)
+    if FRONTEND_URL:
+        return FRONTEND_URL.rstrip("/")
+    # Next best: browser Origin header from frontend -> backend request
+    origin = request.headers.get("origin")
+    if origin:
+        o = _origin_from_url(origin)
+        if o:
+            return o.rstrip("/")
+    # Next best: Referer header (may include path)
+    referer = request.headers.get("referer")
+    if referer:
+        o = _origin_from_url(referer)
+        if o:
+            return o.rstrip("/")
+    # Hard fallback
+    return "https://portal.dsgtransport.net"
+
+def _effective_redirect_uri(request: Request) -> str:
+    """
+    Return the OAuth callback URL used for BOTH:
+    - redirect_uri sent to Google in /google/login
+    - redirect_uri sent to Google token exchange in /google/callback
+
+    This must match Google Cloud Console *exactly* and should be on the backend domain.
+    Do NOT derive it from request Host in production because proxies/rewrites can change Host.
+    """
+    host = (request.headers.get("host") or "").lower()
+    if "localhost" in host or host.startswith("127.0.0.1"):
+        proto = request.headers.get("x-forwarded-proto", "http")
+        return f"{proto}://{request.headers.get('host')}/api/auth/google/callback"
+
+    # Production/staging: use configured or default backend callback URL
+    return GOOGLE_REDIRECT_URI
+
+def _require_google_oauth_configured() -> None:
+    # If these are missing/invalid, Google returns: 401 invalid_client (OAuth client was not found)
+    if not GOOGLE_CLIENT_ID or not isinstance(GOOGLE_CLIENT_ID, str) or not GOOGLE_CLIENT_ID.strip():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured (missing GOOGLE_CLIENT_ID / Secret Manager secret 'google-client-id').",
+        )
+    if not GOOGLE_CLIENT_SECRET or not isinstance(GOOGLE_CLIENT_SECRET, str) or not GOOGLE_CLIENT_SECRET.strip():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured (missing GOOGLE_CLIENT_SECRET / Secret Manager secret 'google-client-secret').",
+        )
+
+    # Basic sanity check: Google OAuth web client IDs look like:
+    # 123456789012-abcdefg.apps.googleusercontent.com
+    # This catches common misconfigs (wrong var, JSON pasted, quotes, etc.)
+    if ".apps.googleusercontent.com" not in GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Google OAuth client id looks invalid. "
+                "Expected something ending with '.apps.googleusercontent.com'. "
+                "Re-check GOOGLE_CLIENT_ID / Secret Manager secret 'google-client-id'."
+            ),
+        )
 
 class OTPRequest(BaseModel):
     email: str
@@ -415,13 +491,13 @@ async def google_login(request: Request):
     Initiate direct Google OAuth login.
     Redirects user to Google's login page.
     """
-    # Get the redirect URI from request or use default
-    redirect_uri = GOOGLE_REDIRECT_URI
-    
-    # For preview environment, use the preview URL
-    host = request.headers.get("host", "")
-    if "preview" in host or "localhost" in host:
-        redirect_uri = f"https://{host}/api/auth/google/callback"
+    _require_google_oauth_configured()
+
+    redirect_uri = _effective_redirect_uri(request)
+    frontend_url = _effective_frontend_url(request)
+    # Safe debug log: never print secrets, only last chars of client id.
+    client_id_tail = GOOGLE_CLIENT_ID[-12:] if GOOGLE_CLIENT_ID else "missing"
+    print(f"[Google OAuth] /google/login using redirect_uri={redirect_uri} frontend_url={frontend_url} client_id_tail=...{client_id_tail}")
     
     # Build Google OAuth URL
     params = {
@@ -430,7 +506,10 @@ async def google_login(request: Request):
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "offline",
-        "prompt": "select_account"
+        "prompt": "select_account",
+        # Carry the desired frontend origin through the OAuth roundtrip.
+        # This is critical for Vercel preview deployments where the frontend URL is not fixed.
+        "state": frontend_url,
     }
     
     google_auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
@@ -439,26 +518,24 @@ async def google_login(request: Request):
 
 
 @router.get("/google/callback")
-async def google_callback(request: Request, code: str = None, error: str = None):
+async def google_callback(request: Request, code: str = None, error: str = None, state: str = None):
     """
     Handle Google OAuth callback.
     Exchanges code for tokens and creates user session.
     """
     db = await get_db()
     
-    # Get the host for redirect URI
-    host = request.headers.get("host", "")
-    origin = request.headers.get("origin", "")
+    redirect_uri = _effective_redirect_uri(request)
+
+    # Prefer state (set in /google/login), then env/headers fallbacks.
+    frontend_url = None
+    if state:
+        frontend_url = _origin_from_url(state) or (state if state.startswith("http") else None)
+    if not frontend_url:
+        frontend_url = _effective_frontend_url(request)
+    frontend_url = frontend_url.rstrip("/")
     
-    # Determine environment
-    if "preview" in host or "localhost" in host:
-        redirect_uri = f"https://{host}/api/auth/google/callback"
-        frontend_url = f"https://{host}"
-    else:
-        redirect_uri = GOOGLE_REDIRECT_URI
-        frontend_url = "https://portal.dsgtransport.net"
-    
-    print(f"[Google OAuth] Callback received - host: {host}, redirect_uri: {redirect_uri}")
+    print(f"[Google OAuth] Callback received - redirect_uri: {redirect_uri}, frontend_url: {frontend_url}")
     
     if error:
         print(f"[Google OAuth] Error from Google: {error}")
@@ -517,10 +594,22 @@ async def google_callback(request: Request, code: str = None, error: str = None)
     if not google_email:
         return RedirectResponse(url=f"{frontend_url}/login?error=no_email")
     
+    try:
+        db_name = getattr(db, "name", None)
+    except Exception:
+        db_name = None
+    print(f"[Google OAuth] Looking up user email={google_email} db={db_name}")
+
     # Find existing user by email
     user = await db.users.find_one({"email": google_email})
     
     if not user:
+        # This almost always means the backend is pointed at a different database than expected.
+        try:
+            users_count = await db.users.estimated_document_count()
+        except Exception:
+            users_count = None
+        print(f"[Google OAuth] No account found for {google_email} in db={db_name} users_count={users_count}")
         return RedirectResponse(url=f"{frontend_url}/login?error=no_account&email={google_email}")
     
     # Check if user is suspended

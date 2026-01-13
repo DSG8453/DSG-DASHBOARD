@@ -1,5 +1,11 @@
 // API Service - Centralized API calls with authentication
-const API_URL = process.env.REACT_APP_BACKEND_URL || '';
+// Normalize backend URL to avoid common misconfigs:
+// - `https://api.example.com/api` (would double `/api/api/...`)
+// - trailing slashes
+const RAW_BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
+const API_URL = RAW_BACKEND_URL
+  .replace(/\/+$/, "")
+  .replace(/\/api$/, "");
 
 // Helper to get auth token
 const getAuthHeader = () => {
