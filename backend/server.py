@@ -40,11 +40,18 @@ app = FastAPI(
 )
 
 # CORS
-origins = os.getenv("CORS_ORIGINS", "*").split(",")
+cors_origins_raw = os.getenv("CORS_ORIGINS", "*")
+origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()] or ["*"]
+allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+
+# Browsers disallow `Access-Control-Allow-Credentials: true` with `Access-Control-Allow-Origin: *`
+if origins == ["*"] and allow_credentials:
+    print("Warning: CORS_ALLOW_CREDENTIALS=true is incompatible with CORS_ORIGINS='*'. Disabling credentials.")
+    allow_credentials = False
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

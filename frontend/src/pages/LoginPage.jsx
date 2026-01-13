@@ -32,8 +32,13 @@ export const LoginPage = () => {
     
     try {
       // Direct Google OAuth - redirects to Google login page
-      const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
-      window.location.href = `${backendUrl}/api/auth/google/login`;
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "";
+      // If backend URL isn't configured, fall back to same-origin `/api/*`
+      // (works with Vercel rewrites in `vercel.json`).
+      const loginUrl = backendUrl
+        ? `${backendUrl}/api/auth/google/login`
+        : "/api/auth/google/login";
+      window.location.href = loginUrl;
     } catch (error) {
       setIsLoading(false);
       toast.error("Login failed", {

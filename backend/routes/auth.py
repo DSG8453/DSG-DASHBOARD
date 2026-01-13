@@ -12,7 +12,7 @@ import string
 import os
 import httpx
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 router = APIRouter()
 security = HTTPBearer()
@@ -29,7 +29,51 @@ except Exception as e:
     print(f"Warning: Could not load Google OAuth secrets: {e}")
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = "https://api.dsgtransport.net/api/auth/google/callback"
+# OAuth redirect/callback URI MUST match what is configured in Google Cloud Console.
+# Prefer environment variables so Vercel previews / staging can work without code changes.
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://api.dsgtransport.net/api/auth/google/callback")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://portal.dsgtransport.net")
+
+def _origin_from_url(url: str) -> str | None:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return None
+    return None
+
+def _effective_frontend_url(request: Request) -> str:
+    # Explicit env wins (production/staging best practice)
+    if FRONTEND_URL:
+        return FRONTEND_URL.rstrip("/")
+    # Next best: browser Origin header from frontend -> backend request
+    origin = request.headers.get("origin")
+    if origin:
+        o = _origin_from_url(origin)
+        if o:
+            return o.rstrip("/")
+    # Next best: Referer header (may include path)
+    referer = request.headers.get("referer")
+    if referer:
+        o = _origin_from_url(referer)
+        if o:
+            return o.rstrip("/")
+    # Hard fallback
+    return "https://portal.dsgtransport.net"
+
+def _effective_redirect_uri(request: Request) -> str:
+    # Explicit env wins (must match Google Console)
+    if os.getenv("GOOGLE_REDIRECT_URI"):
+        return GOOGLE_REDIRECT_URI
+
+    # For local/dev without env, derive from request host.
+    # Note: behind reverse proxies, X-Forwarded-Proto should be set.
+    host = request.headers.get("host", "")
+    proto = request.headers.get("x-forwarded-proto", "https")
+    if host:
+        return f"{proto}://{host}/api/auth/google/callback"
+    return GOOGLE_REDIRECT_URI
 
 class OTPRequest(BaseModel):
     email: str
@@ -415,13 +459,8 @@ async def google_login(request: Request):
     Initiate direct Google OAuth login.
     Redirects user to Google's login page.
     """
-    # Get the redirect URI from request or use default
-    redirect_uri = GOOGLE_REDIRECT_URI
-    
-    # For preview environment, use the preview URL
-    host = request.headers.get("host", "")
-    if "preview" in host or "localhost" in host:
-        redirect_uri = f"https://{host}/api/auth/google/callback"
+    redirect_uri = _effective_redirect_uri(request)
+    frontend_url = _effective_frontend_url(request)
     
     # Build Google OAuth URL
     params = {
@@ -430,7 +469,10 @@ async def google_login(request: Request):
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "offline",
-        "prompt": "select_account"
+        "prompt": "select_account",
+        # Carry the desired frontend origin through the OAuth roundtrip.
+        # This is critical for Vercel preview deployments where the frontend URL is not fixed.
+        "state": frontend_url,
     }
     
     google_auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
@@ -439,26 +481,24 @@ async def google_login(request: Request):
 
 
 @router.get("/google/callback")
-async def google_callback(request: Request, code: str = None, error: str = None):
+async def google_callback(request: Request, code: str = None, error: str = None, state: str = None):
     """
     Handle Google OAuth callback.
     Exchanges code for tokens and creates user session.
     """
     db = await get_db()
     
-    # Get the host for redirect URI
-    host = request.headers.get("host", "")
-    origin = request.headers.get("origin", "")
+    redirect_uri = _effective_redirect_uri(request)
+
+    # Prefer state (set in /google/login), then env/headers fallbacks.
+    frontend_url = None
+    if state:
+        frontend_url = _origin_from_url(state) or (state if state.startswith("http") else None)
+    if not frontend_url:
+        frontend_url = _effective_frontend_url(request)
+    frontend_url = frontend_url.rstrip("/")
     
-    # Determine environment
-    if "preview" in host or "localhost" in host:
-        redirect_uri = f"https://{host}/api/auth/google/callback"
-        frontend_url = f"https://{host}"
-    else:
-        redirect_uri = GOOGLE_REDIRECT_URI
-        frontend_url = "https://portal.dsgtransport.net"
-    
-    print(f"[Google OAuth] Callback received - host: {host}, redirect_uri: {redirect_uri}")
+    print(f"[Google OAuth] Callback received - redirect_uri: {redirect_uri}, frontend_url: {frontend_url}")
     
     if error:
         print(f"[Google OAuth] Error from Google: {error}")
