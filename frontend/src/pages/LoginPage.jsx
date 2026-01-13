@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +17,36 @@ export const LoginPage = () => {
   const [passwordLoginAllowed, setPasswordLoginAllowed] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Surface backend OAuth errors (backend redirects to `/login?error=...&email=...`)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const error = params.get("error");
+    if (!error) return;
+
+    const errorEmail = params.get("email");
+    let description = "Sign-in failed. Please try again.";
+
+    if (error === "no_account") {
+      description = `No account found for ${errorEmail || "this email"}. Please contact your administrator.`;
+      if (errorEmail) setEmail(errorEmail);
+    } else if (error === "suspended") {
+      description = "Your account is suspended. Please contact your administrator.";
+    } else if (error === "oauth_failed") {
+      description = "Google sign-in could not be completed. Please try again.";
+    } else if (error === "token_exchange_failed") {
+      description = "Google token exchange failed. Please try again.";
+    } else if (error === "userinfo_failed") {
+      description = "Could not read your Google profile. Please try again.";
+    }
+
+    toast.error("Google sign-in blocked", { description });
+
+    // Clean URL so refresh doesn't re-toast
+    const cleanUrl = `${window.location.pathname}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", cleanUrl);
+  }, [location.search]);
 
   // Check if we're inside an iframe (Emergent preview panel)
   const isInIframe = () => {
