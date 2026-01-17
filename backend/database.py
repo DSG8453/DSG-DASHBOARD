@@ -1,4 +1,5 @@
 import os
+import time
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
@@ -41,6 +42,18 @@ async def close_db():
 
 async def get_db():
     return db
+
+async def ping_db():
+    if client is None:
+        return {"ok": False, "error": "Mongo client not initialized"}
+
+    try:
+        start_time = time.perf_counter()
+        await client.admin.command("ping")
+        latency_ms = round((time.perf_counter() - start_time) * 1000)
+        return {"ok": True, "latencyMs": latency_ms}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 async def seed_initial_data():
     """Seed initial admin user and tools if database is empty"""
