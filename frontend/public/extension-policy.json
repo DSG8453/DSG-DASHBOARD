@@ -1,6 +1,6 @@
 {
   "ExtensionSettings": {
-    "dsg-transport-secure-login": {
+    "REPLACE_WITH_EXTENSION_ID": {
       "installation_mode": "force_installed",
       "update_url": "https://keyvault-27.preview.emergentagent.com/extension-update.xml"
     }
