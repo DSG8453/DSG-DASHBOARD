@@ -31,7 +31,9 @@ This guide explains how to deploy the DSG Transport Secure Login extension to al
 
 1. Click the **+** (Add) button → **Add Chrome app or extension by ID**
 2. In the dialog:
-   - **Extension ID**: Leave blank for now (we'll configure via policy)
+   - **Extension ID**: Use the 32-character ID from your signed CRX
+     - Pack the extension once and copy the ID from `chrome://extensions`
+     - Ensure the ID matches the `appid` in `extension-update.xml`
    - **Installation URL**: 
      ```
      https://keyvault-27.preview.emergentagent.com/extension-update.xml
@@ -47,10 +49,15 @@ This guide explains how to deploy the DSG Transport Secure Login extension to al
 5. Add new policy:
    ```json
    {
-     "installation_mode": "force_installed",
-     "update_url": "https://keyvault-27.preview.emergentagent.com/extension-update.xml"
+     "ExtensionSettings": {
+       "REPLACE_WITH_EXTENSION_ID": {
+         "installation_mode": "force_installed",
+         "update_url": "https://keyvault-27.preview.emergentagent.com/extension-update.xml"
+       }
+     }
    }
    ```
+6. Replace `REPLACE_WITH_EXTENSION_ID` with your actual ID
 
 ---
 
@@ -104,8 +111,9 @@ This means the extension is not force-installed. Check:
 
 ### Extension Shows Errors?
 1. Check the extension update URL is accessible
-2. Verify the ZIP file and manifest are valid
-3. Check Chrome version compatibility (Manifest V3 requires Chrome 88+)
+2. Verify the CRX file and manifest are valid
+3. If you see an icon download error, confirm all icon paths point to valid PNGs
+4. Check Chrome version compatibility (Manifest V3 requires Chrome 88+)
 
 ---
 
@@ -113,7 +121,7 @@ This means the extension is not force-installed. Check:
 
 | File | URL |
 |------|-----|
-| Extension ZIP | `https://keyvault-27.preview.emergentagent.com/dsg-transport-extension.zip` |
+| Extension CRX | `https://keyvault-27.preview.emergentagent.com/dsg-transport-extension.crx` |
 | Update Manifest | `https://keyvault-27.preview.emergentagent.com/extension-update.xml` |
 | Policy JSON | `https://keyvault-27.preview.emergentagent.com/extension-policy.json` |
 
@@ -122,7 +130,7 @@ This means the extension is not force-installed. Check:
 ## Security Notes
 
 1. **Force-installed extensions cannot be uninstalled by users** - This ensures all employees have the extension
-2. **Extensions update automatically** - When you update the ZIP file, all users get the update
+2. **Extensions update automatically** - When you update the CRX file, all users get the update
 3. **Only works with managed accounts** - Personal Gmail accounts won't receive the extension
 4. **Audit trail** - Google Admin Console logs all extension installations
 

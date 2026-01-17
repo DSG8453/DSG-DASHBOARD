@@ -325,6 +325,7 @@ export const ProfilePage = ({ currentUser }) => {
                 <ul className="list-disc list-inside space-y-1 pl-2">
                   <li>Go to <code className="bg-muted px-1 rounded">admin.google.com</code></li>
                   <li>Devices → Chrome → Apps & extensions</li>
+                  <li>Use the 32-character Extension ID from your signed CRX</li>
                   <li>Add extension with update URL below</li>
                 </ul>
                 <div className="mt-2 p-2 bg-background rounded border">
