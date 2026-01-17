@@ -113,7 +113,7 @@ This means the extension is not force-installed. Check:
 1. Check the extension update URL is accessible
 2. Verify the CRX file and manifest are valid
 3. If you see an icon download error, confirm all icon paths point to valid PNGs
-3. Check Chrome version compatibility (Manifest V3 requires Chrome 88+)
+4. Check Chrome version compatibility (Manifest V3 requires Chrome 88+)
 
 ---
 
