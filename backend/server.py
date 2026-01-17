@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
@@ -21,7 +21,7 @@ from routes.activity_logs import router as activity_logs_router
 from routes.ip_management import router as ip_management_router
 from routes.secure_access import router as secure_access_router
 from routes.gateway import router as gateway_router
-from database import connect_db, close_db
+from database import connect_db, close_db, ping_db
 from utils.websocket_manager import manager
 
 @asynccontextmanager
@@ -62,9 +62,43 @@ app.include_router(ip_management_router, prefix="/api/ip-management", tags=["IP 
 app.include_router(secure_access_router, prefix="/api/secure-access", tags=["Secure Access"])
 app.include_router(gateway_router, prefix="/api/gateway", tags=["Tool Gateway"])
 
+async def build_health_payload():
+    db_health = await ping_db()
+    status_value = "healthy" if db_health["ok"] else "unhealthy"
+    return {
+        "status": status_value,
+        "service": "DSG Transport API",
+        "checks": {
+            "database": db_health,
+        },
+    }
+
+
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "service": "DSG Transport API"}
+    return await build_health_payload()
+
+
+@app.get("/health")
+async def health_check_root():
+    return await build_health_payload()
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    payload = await build_health_payload()
+    if payload["status"] == "healthy":
+        return {"ready": True, "checks": payload["checks"]}
+
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"ready": False, "checks": payload["checks"]},
+    )
+
+
+@app.get("/health/live")
+async def liveness_check():
+    return {"alive": True, "service": "DSG Transport API"}
 
 
 @app.get("/api/download/extension")
